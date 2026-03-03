@@ -3,11 +3,12 @@
 ![github](https://github.com/user-attachments/assets/9cd29f81-9203-4d00-91ab-066bb83d9574)
 
 I keep a list of project ideas I want to do, and fairly near the top it says "NEW CLOCK".
-
 After reading about [Cistercian Numerals](https://en.wikipedia.org/wiki/Cistercian_numerals) I decided to make a clock which:
 
 1) Shows the date and time in the least amount of digits
 2) Acts as a way of training my brain to do repetitive maths (something I don't enjoy)
+
+[![Watch on YouTube](https://img.youtube.com/vi/COuOULkGAXk/0.jpg)](https://youtu.be/COuOULkGAXk)
 
 The design is a custom PCB based on a ESP32 and MAX6969 LED drivers in a 3D printed housing
 
