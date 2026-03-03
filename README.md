@@ -11,6 +11,17 @@ After reading about [Cistercian Numerals](https://en.wikipedia.org/wiki/Cisterci
 
 The design is a custom PCB based on a ESP32 and MAX6969 LED drivers in a 3D printed housing
 
+# How to read the time
+
+The Cistercian Numeral system uses one digit to be able to count up to 9999
+
+![cistercian](https://github.com/user-attachments/assets/e4d96275-dfc1-48ae-9558-1d56f32a0f27)
+
+The clock has two digits, left and right. The goal was to use as much of the range of each digit as possible.
+
+The right hand digit is counting up in seconds until it reaches 7200 which is 2 hours.
+
+The left hand giti is counting up in 2 hour increments, 4380 sets of 2 hours in a year.
 
 # Software Setup
 
@@ -19,6 +30,8 @@ To setup the ESP32, load MicroPython from https://micropython.org/download/
 Once loaded, put the `main.py` and `secrets.py` into the MicroPython environment.
 
 You will need to update the `secrets.py` file with your WiFi details
+
+You can change your timezone in the main.py using timezone_offset
 
 # Mechanical Build
 
