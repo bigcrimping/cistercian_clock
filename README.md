@@ -22,7 +22,7 @@ The clock has two digits, left and right. The goal was to use as much of the ran
 
 The right hand digit is counting up in seconds until it reaches 7200 which is 2 hours.
 
-The left hand giti is counting up in 2 hour increments, 4380 sets of 2 hours in a year.
+The left hand digit is counting up in 2 hour increments, 4380 sets of 2 hours in a year.
 
 # Software Setup
 
