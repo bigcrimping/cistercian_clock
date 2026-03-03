@@ -1,4 +1,4 @@
-![1_button_in](https://github.com/user-attachments/assets/143532bf-c5dc-4aa8-96b0-7af16fade279)# Cistercian Clock
+# Cistercian Clock
 
 ![github](https://github.com/user-attachments/assets/9cd29f81-9203-4d00-91ab-066bb83d9574)
 
