@@ -31,8 +31,10 @@ LTR329_DATA_CH0_LOW = 0x8A  # ALS data CH0 low byte
 LTR329_DATA_CH0_HIGH = 0x8B  # ALS data CH0 high byte
 
 # Brightness control parameters
-MIN_BRIGHTNESS = 200      # Minimum PWM duty cycle (0-1023)
-MAX_BRIGHTNESS = 1000     # Maximum PWM duty cycle (0-1023)
+# OE on the MAX6969 is active-low: a LOWER PWM duty means the outputs are
+# enabled for longer, so the display is BRIGHTER.
+MIN_BRIGHTNESS = 200      # PWM duty (0-1023) for the brightest display
+MAX_BRIGHTNESS = 1000     # PWM duty (0-1023) for the dimmest display
 LIGHT_SENSOR_UPDATE_MS = 1000  # How often to read light sensor (ms)
 LIGHT_SENSOR_GAIN = 1.0  # Adjusts sensitivity (higher = more sensitive)
 LIGHT_SENSOR_OFFSET = 0  # Light level offset
@@ -77,7 +79,7 @@ def init_light_sensor():
         # Configure sensor
         # ALS mode active (0x01), gain 1x (0x00)
         i2c.writeto_mem(LTR329_I2C_ADDR, LTR329_ALS_CONTR, bytes([0x01]))
-        # Measurement rate 500ms, integration time 100ms
+        # Integration time 100ms, measurement rate 100ms
         i2c.writeto_mem(LTR329_I2C_ADDR, LTR329_ALS_MEAS_RATE, bytes([0x01]))
         
         print("LTR-329ALS-01 initialized successfully")
@@ -89,15 +91,15 @@ def init_light_sensor():
 def read_light_level():
     """Read light level from LTR-329ALS-01"""
     try:
-        # Read both channels (CH1 = IR+visible, CH0 = visible)
-        ch0_low = i2c.readfrom_mem(LTR329_I2C_ADDR, LTR329_DATA_CH0_LOW, 1)[0]
-        ch0_high = i2c.readfrom_mem(LTR329_I2C_ADDR, LTR329_DATA_CH0_HIGH, 1)[0]
-        ch1_low = i2c.readfrom_mem(LTR329_I2C_ADDR, LTR329_DATA_CH1_LOW, 1)[0]
-        ch1_high = i2c.readfrom_mem(LTR329_I2C_ADDR, LTR329_DATA_CH1_HIGH, 1)[0]
-        
+        # Read both channels (CH0 = visible+IR, CH1 = IR only).
+        # The sensor locks the data registers on the first read of 0x88 and
+        # unlocks after 0x8B, so read all four in one burst in that order to
+        # get CH0 and CH1 from the same measurement.
+        data = i2c.readfrom_mem(LTR329_I2C_ADDR, LTR329_DATA_CH1_LOW, 4)
+
         # Combine high and low bytes
-        ch0 = (ch0_high << 8) | ch0_low
-        ch1 = (ch1_high << 8) | ch1_low
+        ch1 = (data[1] << 8) | data[0]
+        ch0 = (data[3] << 8) | data[2]
         
         # Calculate lux (simplified formula - adjust based on your needs)
         ratio = ch1 / (ch0 + ch1) if (ch0 + ch1) > 0 else 0
@@ -119,10 +121,10 @@ def read_light_level():
 # Initialize PWM for Output Enable (OE) on IO9
 oe_pwm = PWM(Pin(OE_PIN))
 oe_pwm.freq(1000)  # 1kHz PWM frequency
-oe_pwm.duty(MAX_BRIGHTNESS)  # Start at max brightness
+oe_pwm.duty(MIN_BRIGHTNESS)  # Start fully bright (OE is active-low)
 
-# Global for current brightness
-current_brightness = MAX_BRIGHTNESS
+# Global for current PWM duty
+current_brightness = MIN_BRIGHTNESS
 
 # Store the state of all outputs (4 chips × 16 outputs each = 64 bits)
 output_state = [0x0000, 0x0000, 0x0000, 0x0000]  # 16-bit register per chip
@@ -229,90 +231,105 @@ def update_all_chips():
 
 # LED mapping for digits - extracted from the spreadsheet
 # Maps number to list of (chip_id, output_pin) tuples
+# Stave (vertical line) LEDs, lit for every value of this digit
+STAVE_SECONDS = [(4, 1), (2, 4), (4, 0), (2, 8), (3, 3)]
+
 led_mapping_seconds = {
-    0: [(4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    1: [(2, 0), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    2: [(2, 9), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    3: [(2, 11), (2, 5), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    4: [(2, 7), (2, 2), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    5: [(2, 7), (2, 2), (2, 0), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    6: [(4, 1), (2, 4), (2, 1), (4, 0), (2, 8), (3, 3)],
-    7: [(2, 0), (4, 1), (2, 4), (2, 1), (4, 0), (2, 8), (3, 3)],
-    8: [(2, 9), (4, 1), (2, 4), (2, 1), (4, 0), (2, 8), (3, 3)],
-    9: [(2, 9), (2, 0), (4, 1), (2, 4), (2, 1), (4, 0), (2, 8), (3, 3)],
-    10: [(2, 15), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    20: [(2, 10), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    30: [(2, 3), (2, 12), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    40: [(2, 6), (2, 14), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    50: [(2, 6), (2, 14), (2, 15), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    60: [(2, 13), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    70: [(2, 15), (2, 13), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    80: [(2, 13), (2, 10), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    90: [(2, 15), (2, 13), (2, 10), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    100: [(4, 7), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    200: [(4, 2), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    300: [(4, 5), (4, 1), (4, 3), (2, 4), (4, 0), (2, 8), (3, 3)],
-    400: [(4, 6), (4, 4), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    500: [(4, 7), (4, 6), (4, 4), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    600: [(4, 8), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    700: [(4, 8), (4, 7), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    800: [(4, 8), (4, 2), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    900: [(4, 8), (4, 7), (4, 2), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    1000: [(4, 9), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    2000: [(4, 15), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    3000: [(4, 10), (4, 1), (2, 4), (4, 13), (4, 0), (2, 8), (3, 3)],
-    4000: [(4, 11), (4, 1), (2, 4), (4, 0), (4, 12), (2, 8), (3, 3)],
-    5000: [(4, 9), (4, 11), (4, 1), (2, 4), (4, 0), (4, 12), (2, 8), (3, 3)],
-    6000: [(4, 14), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    7000: [(4, 9), (4, 14), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    8000: [(4, 15), (4, 14), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
-    9000: [(4, 9), (4, 15), (4, 14), (4, 1), (2, 4), (4, 0), (2, 8), (3, 3)],
+    0: [],
+    1: [(2, 0)],
+    2: [(2, 9)],
+    3: [(2, 11), (2, 5)],
+    4: [(2, 7), (2, 2)],
+    5: [(2, 7), (2, 2), (2, 0)],
+    6: [(2, 1)],
+    7: [(2, 0), (2, 1)],
+    8: [(2, 9), (2, 1)],
+    9: [(2, 9), (2, 0), (2, 1)],
+    10: [(2, 15)],
+    20: [(2, 10)],
+    30: [(2, 3), (2, 12)],
+    40: [(2, 6), (2, 14)],
+    50: [(2, 6), (2, 14), (2, 15)],
+    60: [(2, 13)],
+    70: [(2, 15), (2, 13)],
+    80: [(2, 13), (2, 10)],
+    90: [(2, 15), (2, 13), (2, 10)],
+    100: [(4, 7)],
+    200: [(4, 2)],
+    300: [(4, 5), (4, 3)],
+    400: [(4, 6), (4, 4)],
+    500: [(4, 7), (4, 6), (4, 4)],
+    600: [(4, 8)],
+    700: [(4, 8), (4, 7)],
+    800: [(4, 8), (4, 2)],
+    900: [(4, 8), (4, 7), (4, 2)],
+    1000: [(4, 9)],
+    2000: [(4, 15)],
+    3000: [(4, 10), (4, 13)],
+    4000: [(4, 11), (4, 12)],
+    5000: [(4, 9), (4, 11), (4, 12)],
+    6000: [(4, 14)],
+    7000: [(4, 9), (4, 14)],
+    8000: [(4, 15), (4, 14)],
+    9000: [(4, 9), (4, 15), (4, 14)],
 }
+
+# Stave (vertical line) LEDs, lit for every value of this digit
+STAVE_2HOURS = [(3, 8), (1, 9), (1, 6)]
 
 led_mapping_2hours = {
-    0: [(3, 8), (1, 9), (1, 6)],
-    1: [(3, 8), (1, 9), (1, 6),(1,15)],
-    2: [(3, 8), (1, 9), (1, 6), (1, 7)],
-    3: [(3, 8), (1, 9), (1, 1), (1, 5), (1, 6)],
-    4: [(3, 8), (1, 2), (1, 9), (1, 4), (1, 6)],
-    5: [(3, 8), (1, 2), (1, 0), (1, 9), (1, 4), (1, 6)],
-    6: [(3, 8), (1, 3), (1, 9), (1, 6)],
-    7: [(3, 8), (1, 3), (1, 0), (1, 9), (1, 6)],
-    8: [(3, 8), (1, 3), (1, 9), (1, 6), (1, 7)],
-    9: [(3, 8), (1, 3), (1, 0), (1, 9), (1, 6), (1, 7)],
-    10: [(3, 8), (1, 15), (1, 9), (1, 6)],
-    20: [(3, 8), (1, 9), (1, 8), (1, 6)],
-    30: [(3, 8), (1, 10), (1, 14), (1, 9), (1, 6)],
-    40: [(3, 8), (1, 13), (1, 9), (1, 6), (1, 12)],
-    50: [(3, 8), (1, 13), (1, 15), (1, 9), (1, 6), (1, 12)],
-    60: [(3, 8), (1, 11), (1, 9), (1, 6)],
-    70: [(3, 8), (1, 11), (1, 15), (1, 9), (1, 6)],
-    80: [(3, 8), (1, 11), (1, 9), (1, 8), (1, 6)],
-    90: [(3, 8), (1, 11), (1, 15), (1, 9), (1, 8), (1, 6)],
-    100: [(3, 8), (3, 4), (1, 9), (1, 6)],
-    200: [(3, 8), (1, 9), (3, 0), (1, 6)],
-    300: [(3, 8), (1, 9), (3, 6), (3, 1), (1, 6)],
-    400: [(3, 8), (1, 9), (3, 5), (3, 2), (1, 6)],
-    500: [(3, 8), (3, 4), (1, 9), (3, 5), (3, 2), (1, 6)],
-    600: [(3, 7), (3, 8), (1, 9), (1, 6)],
-    700: [(3, 7), (3, 8), (3, 4), (1, 9), (1, 6)],
-    800: [(3, 7), (3, 8), (1, 9), (3, 0), (1, 6)],
-    900: [(3, 7), (3, 8), (3, 4), (1, 9), (3, 0), (1, 6)],
-    1000: [(3, 8), (3, 10), (1, 9), (1, 6)],
-    2000: [(3, 8), (3, 15), (1, 9), (1, 6)],
-    3000: [(3, 8), (3, 14), (1, 9), (3, 12), (1, 6)],
-    4000: [(3, 8), (3, 9), (3, 13), (1, 9), (1, 6)],
-    5000: [(3, 8), (3, 9), (3, 10), (3, 13), (1, 9), (1, 6)],
-    6000: [(3, 8), (3, 11), (1, 9), (1, 6)],
-    7000: [(3, 8), (3, 10), (3, 11), (1, 9), (1, 6)],
-    8000: [(3, 8), (3, 15), (3, 11), (1, 9), (1, 6)],
-    9000: [(3, 8), (3, 15), (3, 10), (3, 11), (1, 9), (1, 6)],
+    0: [],
+    1: [(1, 15)],
+    2: [(1, 7)],
+    3: [(1, 1), (1, 5)],
+    4: [(1, 2), (1, 4)],
+    5: [(1, 2), (1, 0), (1, 4)],
+    6: [(1, 3)],
+    7: [(1, 3), (1, 0)],
+    8: [(1, 3), (1, 7)],
+    9: [(1, 3), (1, 0), (1, 7)],
+    10: [(1, 15)],
+    20: [(1, 8)],
+    30: [(1, 10), (1, 14)],
+    40: [(1, 13), (1, 12)],
+    50: [(1, 13), (1, 15), (1, 12)],
+    60: [(1, 11)],
+    70: [(1, 11), (1, 15)],
+    80: [(1, 11), (1, 8)],
+    90: [(1, 11), (1, 15), (1, 8)],
+    100: [(3, 4)],
+    200: [(3, 0)],
+    300: [(3, 6), (3, 1)],
+    400: [(3, 5), (3, 2)],
+    500: [(3, 4), (3, 5), (3, 2)],
+    600: [(3, 7)],
+    700: [(3, 7), (3, 4)],
+    800: [(3, 7), (3, 0)],
+    900: [(3, 7), (3, 4), (3, 0)],
+    1000: [(3, 10)],
+    2000: [(3, 15)],
+    3000: [(3, 14), (3, 12)],
+    4000: [(3, 9), (3, 13)],
+    5000: [(3, 9), (3, 10), (3, 13)],
+    6000: [(3, 11)],
+    7000: [(3, 10), (3, 11)],
+    8000: [(3, 15), (3, 11)],
+    9000: [(3, 15), (3, 10), (3, 11)],
 }
 
-def build_combined_registers(number, mapping):
+def set_leds(regs, leds):
+    """OR a list of (chip_id, output_pin) tuples into four 16-bit registers."""
+    for chip_id, output_pin in leds:
+        mapped = CHIP_MAP.get(chip_id)
+        if mapped is None or not (0 <= output_pin < 16):
+            continue
+        regs[mapped] |= (1 << output_pin)
+
+def build_combined_registers(number, mapping, stave):
     """
     Build four 16-bit register values for a number in range 0..9999 by ORing
-    the mapping entries for the thousands, hundreds, tens and ones places.
+    the stave LEDs with the mapping entries for the thousands, hundreds, tens
+    and ones places.
 
     Returns a list of four integers [reg0, reg1, reg2, reg3] suitable for
     writing into `output_state` (indices 0..3).
@@ -321,15 +338,11 @@ def build_combined_registers(number, mapping):
         raise ValueError(f"number must be an integer between 0 and {MAX_DISPLAY_VALUE}")
 
     regs = [0x0000, 0x0000, 0x0000, 0x0000]
+    set_leds(regs, stave)
 
     for place in (1, 10, 100, 1000):
         digit = (number // place) % 10
-        key = digit * place
-        for chip_id, output_pin in mapping.get(key, []):
-            mapped = CHIP_MAP.get(chip_id)
-            if mapped is None or not (0 <= output_pin < 16):
-                continue
-            regs[mapped] |= (1 << output_pin)
+        set_leds(regs, mapping.get(digit * place, []))
 
     return regs
 
@@ -421,7 +434,7 @@ def sync_time_with_ntp(ntp_server="pool.ntp.org", timezone_offset=0):
                     epoch = time.mktime((current_time[0], current_time[1], current_time[2],
                                         current_time[4], current_time[5], current_time[6],
                                         current_time[3], 0))
-                    epoch += int(timezone_offset) * 3600
+                    epoch += int(timezone_offset * 3600)  # supports e.g. 5.5 or -3.5
                     t = time.gmtime(epoch)
                     # gmtime returns (year, month, day, hour, minute, second, weekday, yearday)
                     current_time[0] = t[0]  # year
@@ -542,15 +555,15 @@ def update_display_from_rtc():
         block_number = seconds_in_year // SECONDS_PER_BLOCK
         seconds_in_block = seconds_in_year % SECONDS_PER_BLOCK
 
-        # Map seconds in block (0..SECONDS_PER_BLOCK-1) to display value (0..MAX_DISPLAY_VALUE)
-        first_digit_value = int((seconds_in_block / SECONDS_PER_BLOCK) * MAX_DISPLAY_VALUE)
+        # First digit shows the raw seconds within the block (0..7199)
+        first_digit_value = seconds_in_block
 
         # Second digit is the block number
         second_digit_value = block_number
 
         # Build registers for both digits and combine them
-        regs1 = build_combined_registers(first_digit_value, led_mapping_seconds)
-        regs2 = build_combined_registers(second_digit_value, led_mapping_2hours)
+        regs1 = build_combined_registers(first_digit_value, led_mapping_seconds, STAVE_SECONDS)
+        regs2 = build_combined_registers(second_digit_value, led_mapping_2hours, STAVE_2HOURS)
         
         # OR the registers to display both simultaneously
         combined = [(regs1[i] | regs2[i]) & 0xFFFF for i in range(4)]
@@ -562,39 +575,37 @@ def update_display_from_rtc():
     except Exception as e:
         print(f"Error updating RTC display: {e}")
 
-rtc_timer = None
 brightness_timer = None
 breathe_timer = None
 _breathe_step = 0
 
-def start_rtc_display_timer():
-    """
-    Start a timer that updates the display every second based on RTC time.
-    The display shows your position in the year to the second.
-    """
-    global rtc_timer
-    try:
-        # Use Timer(0) to update every 1000ms (1 second)
-        rtc_timer = Timer(0)
-        rtc_timer.init(mode=Timer.PERIODIC, period=1000, callback=lambda t: update_display_from_rtc())
-        print("RTC display timer started - updating every second")
-        return True
-    except Exception as e:
-        print(f"Failed to start RTC display timer: {e}")
-        return False
+# Sync scheduling
+TIMEZONE_OFFSET = 0          # Hours from UTC, fractions allowed (e.g. -5 for EST, 1 for CET, 5.5 for IST)
+SYNC_RETRY_S = 300           # After a failed sync, try again this often (seconds)
+RESYNC_INTERVAL_S = 86400    # Re-sync the RTC with NTP this often once running (seconds)
+DISPLAY_POLL_MS = 100        # How often to check the RTC for a new second
 
-def stop_rtc_display_timer():
-    """Stop the RTC display timer."""
-    global rtc_timer
-    try:
-        if rtc_timer:
-            rtc_timer.deinit()
-            rtc_timer = None
-            print("RTC display timer stopped")
-            return True
-    except Exception as e:
-        print(f"Failed to stop RTC display timer: {e}")
+def resync_rtc():
+    """
+    Re-sync the RTC with NTP while the clock is running, without touching
+    the display. Reconnects WiFi first if it has dropped.
+    """
+    wlan = network.WLAN(network.STA_IF)
+    if not wlan.isconnected() and not connect_to_wifi(SSID, PASSWORD):
+        print("Resync: WiFi unavailable")
         return False
+    return sync_time_with_ntp(NTP_SERVER, TIMEZONE_OFFSET)
+
+def start_brightness_control(light_sensor_initialized):
+    """Start auto-brightness, or fall back to a fixed full brightness."""
+    global brightness_timer
+    if light_sensor_initialized:
+        brightness_timer = Timer(1)
+        brightness_timer.init(period=LIGHT_SENSOR_UPDATE_MS, mode=Timer.PERIODIC, callback=update_brightness)
+        print("Auto-brightness enabled")
+    else:
+        print("Auto-brightness disabled - using maximum brightness")
+        oe_pwm.duty(MIN_BRIGHTNESS)  # Lowest duty = brightest (OE is active-low)
 
 def update_brightness(timer=None):
     """Update display brightness based on ambient light level"""
@@ -631,14 +642,8 @@ def debug_step_mappings(delay_ms=2000):
     for key in keys:
         for i in range(4):
             output_state[i] = 0x0000
-        for chip_id, output_pin in led_mapping_seconds.get(key, []):
-            mapped = CHIP_MAP.get(chip_id)
-            if mapped is not None and 0 <= output_pin < 16:
-                output_state[mapped] |= (1 << output_pin)
-        for chip_id, output_pin in led_mapping_2hours.get(key, []):
-            mapped = CHIP_MAP.get(chip_id)
-            if mapped is not None and 0 <= output_pin < 16:
-                output_state[mapped] |= (1 << output_pin)
+        set_leds(output_state, STAVE_SECONDS + led_mapping_seconds.get(key, []))
+        set_leds(output_state, STAVE_2HOURS + led_mapping_2hours.get(key, []))
         update_all_chips()
         print(f"Mapping key: {key}")
         time.sleep_ms(delay_ms)
@@ -655,37 +660,53 @@ if __name__ == "__main__":
     
     # Synchronize RTC with NTP on startup
     # Update SSID and PASSWORD in secrets.py before running!
-    time_synced = startup_sync_rtc(
-        ssid=SSID,
-        password=PASSWORD,
-        ntp_server=NTP_SERVER,
-        timezone_offset=0  # Change to your timezone offset (e.g., -5 for EST, 1 for CET)
-    )
-    
-    # Only start auto-brightness after successful time sync
-    if time_synced:
-        # Start auto-brightness if sensor is initialized
-        if light_sensor_initialized:
-            brightness_timer = Timer(1)
-            brightness_timer.init(period=LIGHT_SENSOR_UPDATE_MS, mode=Timer.PERIODIC, callback=update_brightness)
-            print("Auto-brightness enabled after time sync")
-        else:
-            print("Auto-brightness disabled - using maximum brightness")
-            oe_pwm.duty(MAX_BRIGHTNESS)
-        
-        time.sleep(1)
-        
-        # Start the RTC display timer - updates display every second
-        # First digit: seconds within current 2-hour block (0-9999)
-        # Second digit: number of 2-hour blocks elapsed since start of year
-        start_rtc_display_timer()
-    else:
-        print("Time sync failed - auto-brightness will not be started")
-    
+    # Set TIMEZONE_OFFSET above for your timezone.
+    time_synced = False
+    last_sync_attempt = None
+    last_sync = 0
+    last_second = None
+
     try:
         while True:
-            time.sleep(1)
+            now = time.time()
+
+            if not time_synced:
+                # Keep retrying until the first sync succeeds (e.g. router
+                # still booting after a power cut). The display stays on the
+                # all-LEDs startup pattern in the meantime.
+                if last_sync_attempt is None or now - last_sync_attempt >= SYNC_RETRY_S:
+                    time_synced = startup_sync_rtc(SSID, PASSWORD, NTP_SERVER, TIMEZONE_OFFSET)
+                    last_sync_attempt = time.time()
+                    if time_synced:
+                        last_sync = time.time()
+                        # Start brightness control only after the startup
+                        # breathe animation has finished with the OE pin.
+                        start_brightness_control(light_sensor_initialized)
+                    else:
+                        print(f"Time sync failed - retrying in {SYNC_RETRY_S}s")
+
+            else:
+                # Periodically correct RTC drift. On failure, try again after
+                # SYNC_RETRY_S instead of waiting a full interval.
+                if now - last_sync >= RESYNC_INTERVAL_S:
+                    if resync_rtc():
+                        last_sync = time.time()
+                    else:
+                        last_sync = time.time() - RESYNC_INTERVAL_S + SYNC_RETRY_S
+                    last_second = None  # Force a redraw after the clock may have jumped
+
+                # Redraw as soon as the RTC ticks over to a new second.
+                # First digit: seconds within current 2-hour block (0-7199)
+                # Second digit: number of 2-hour blocks elapsed since start of year
+                second = RTC().datetime()[6]
+                if second != last_second:
+                    last_second = second
+                    update_display_from_rtc()
+
+            time.sleep_ms(DISPLAY_POLL_MS)
     except KeyboardInterrupt:
         print("\nShutting down...")
-        stop_rtc_display_timer()
+        stop_breathe_timer()
+        if brightness_timer:
+            brightness_timer.deinit()
         print("Done!")

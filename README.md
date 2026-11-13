@@ -28,11 +28,13 @@ The left hand digit is counting up in 2 hour increments, 4380 sets of 2 hours in
 
 To setup the ESP32, load MicroPython from https://micropython.org/download/
 
+Copy `code/secrets.example.py` to `code/secrets.py` and fill in your WiFi details. `secrets.py` is gitignored so your password won't be committed.
+
 Once loaded, put the `main.py` and `secrets.py` into the MicroPython environment.
 
-You will need to update the `secrets.py` file with your WiFi details
+You can change your timezone in the main.py using `TIMEZONE_OFFSET` (hours from UTC, e.g. `1` for CET or `5.5` for IST)
 
-You can change your timezone in the main.py using timezone_offset
+The clock re-syncs with NTP once a day, and if WiFi isn't available at power-up it keeps retrying every 5 minutes.
 
 # Mechanical Build
 
